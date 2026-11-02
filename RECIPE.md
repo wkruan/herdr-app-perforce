@@ -7,7 +7,7 @@ A read-only Perforce panel for the Herdr app's right-hand sidebar, next to Files
 ## What you see
 
 - **Tab bar button** `Perforce` (database icon, `mods/perforce/perforce.svg`) after Files and Changes. It opens the panel in the same right-hand stack (`panel-body`), remembered per space like the other two.
-- **Header** (42 px): `Perforce`, a chip with the client name (hover: client, root, stream), the open file count, and a refresh button that turns into a spinner during a manual refresh. If the last refresh failed, a red bar `Stale · <reason>` sits under it while the previous list stays.
+- **Header** (42 px): `Perforce`, a chip with the client name, `<machine> · <client>` for a space on another machine (hover: machine, client, root, stream), the open file count, and a refresh button that turns into a spinner during a manual refresh. If the last refresh failed, a red bar `Stale · <reason>` sits under it while the previous list stays.
 - **Changelist list**, a virtual list:
   - Change rows (30 px): chevron, change number (or `default`), first description line, a purple `N shelved` chip when the change has shelved files, and a file count. Hover shows the full description.
   - File rows (26 px), indented: an action letter, the path relative to the client root (folder dimmed and cut from the left, file name bright), status icons, and `+added −deleted` (a zero side hidden, `bin` for binary files).
@@ -19,21 +19,22 @@ A read-only Perforce panel for the Herdr app's right-hand sidebar, next to Files
 
 ## How it behaves
 
-- **Which client**: the shown space's. The panel asks `p4 info` from the focused pane's folder, then from each pane of the space in order, and takes the first folder that lies inside its client's root. Results are cached (2 min for a hit, 15 s for a miss). Remote spaces (another machine) show a note instead.
-- **What is listed**: `p4 changes -s pending -c <client> -l` and `p4 fstat -Ro -Op //<client>/...`. The default changelist is always listed. Changes with more than 200 files start folded; folding is remembered per client and change.
+- **Which client**: the shown space's. The panel asks `p4 info` from the focused pane's folder, then from each pane of the space in order, then from the space's folder, and takes the first folder that lies inside its client's root. Results are cached per machine and folder (2 min for a hit, 15 s for a miss).
+- **Other machines**: a space on another machine (`space.machine`, added with Herdr's Add machine) runs every `p4` command and file read there, through `exec`/`readTextFile` with `on`; a focused layout terminal block uses the machine its address names. Only that machine needs `p4`, its settings and a login. Paths are compared by their form: Windows paths ignore case and take either slash, POSIX paths are case-sensitive. Same polling as local spaces.
+- **What is listed**: `p4 changes -s pending -c <client> -l` and `p4 fstat -Ro -Op //<client>/...`. The default changelist is always listed. Changes with more than 200 files start folded; folding is remembered per client (and machine) and change.
 - **Refresh**: only while the panel is on screen. It polls the list every 5 s while the window is in front, line counts (`p4 diff -ds` in batches of 40, up to 300 text files; new files counted from disk, up to 100) and shelved counts (`p4 changes -s shelved` and `p4 describe -S -s`) every 15 s or when the list changes. In the background it pauses the poll but still loads on first show and on a space switch. When the window comes back it refreshes at once if the list is older than 5 s. Nothing redraws unless something shown changed.
 - **Diff**: against the have revision. Edits, integrates and move/adds use `p4 diff -du`; adds and branches show the local file as all added (UTF-8, up to 1 MiB); deletes show `p4 print #have` as all deleted; binary types (`binary`, `apple`, `resource`) show a note with type and revisions. At most 1,500 lines in the panel, 5,000 in the pane.
-- **Selection**: the first file is picked when a client loads. Clicking a file selects it; clicking it again or the close button clears it. The selection is stored in shared state `perforce.selection` per space, so the wide pane follows it.
+- **Selection**: the first file is picked when a client loads. Clicking a file selects it; clicking it again or the close button clears it. The selection (client, root, machine, depot path) is stored in shared state `perforce.selection` per space, so the wide pane follows it on the same machine.
 - **Expand**: opens the wide pane to the right of the focused terminal in the shown tab, or focuses the one already there.
 - **Right-click**: a file offers Copy depot path, Copy local path, Copy file name; a numbered change offers Copy change number and Copy description.
 - **Keyboard**, once the list was clicked: ↑/↓ or k/j move between files, ←/→ or h/l fold or unfold the selected file's change, Enter opens the wide pane, r refreshes. The same commands are `perforce.next`, `perforce.prev`, `perforce.fold`, `perforce.unfold`, `perforce.expand`, `perforce.refresh` for keys.json or `herdr-app do`.
-- **Errors**: login problems read `Not logged in — run p4 login`, network problems `Cannot reach the Perforce server`; the last good list stays, marked stale.
+- **Errors**: login problems read `Not logged in — run p4 login`, network problems `Cannot reach the Perforce server`, an offline machine `Cannot reach <machine>`; the last good list stays, marked stale.
 - **Read-only**: it never runs edit, add, revert, reopen, shelve, submit or any other command that changes Perforce.
 
 ## Built from
 
 - One mod, `mods/perforce`, in three modes chosen by `props()`: none (the panel, `panel.js`), `{ view: "diff", space }` (the pane, `diff.js`), `{ menu: [{ label, text }] }` (the copy menu, opened with `openOverlay({ kind: "popup" })`). `p4.js` holds every Perforce call, parsing, the diff rows and the colors. `MOD` in `p4.js` is the folder name.
-- Herdr: `spaces`, `panes`, `focused`, `layout`, `window`, `theme`, `settings`, `shared`/`setShared`, `run` (`pane.split`, `pane.focus`), `openOverlay`/`closeOverlay`, `nextCommand`, `exec`, `readTextFile`; gpui-base `v_virtual_list` with `on_item_click`, `on_item_secondary_click` and `track_scroll`, `Scrollbar`.
+- Herdr: `spaces`, `panes`, `focused`, `layout`, `window`, `theme`, `settings`, `shared`/`setShared`, `run` (`pane.split`, `pane.focus`), `openOverlay`/`closeOverlay`, `nextCommand`, `exec` and `readTextFile` (with `on`), `machines`; gpui-base `v_virtual_list` with `on_item_click`, `on_item_secondary_click` and `track_scroll`, `Scrollbar`.
 - Programs: `p4` only (`info`, `changes`, `fstat`, `describe`, `diff`, `print`), run with `-Mj -ztag` where output is parsed.
 - The tab button and the panel slot come from a clone of Herdr's `main` layout and `tabs` mod made on the person's machine at install (see Install).
 - Icons: lucide-style 24 px strokes in `mods/perforce/*.svg`.
@@ -56,6 +57,7 @@ A read-only Perforce panel for the Herdr app's right-hand sidebar, next to Files
 - A file with have < head shows the out-of-date icon; a `+l` file shows a lock; a file someone else has open shows the people icon with a count; a change with shelved files shows `N shelved`, also when its files were reverted.
 - Edits show `+n −m` matching `p4 diff -ds`; selecting a file shows its diff against have; the expand button opens a pane that follows later selections.
 - Switching spaces switches clients; hiding the panel stops all p4 processes.
+- In a space on another machine inside a P4 client there, the chip reads `<machine> · <client>`, the list, counts, diff and wide pane come from that machine, and an offline machine shows `Stale · Cannot reach <machine>`.
 
 ## Install
 

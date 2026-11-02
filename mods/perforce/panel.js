@@ -1,5 +1,5 @@
 // Perforce pending changelists for the shown space's client, read-only, with diffs against have.
-// Polls only while this panel is on screen and the window is in front.
+// Polls only while this panel is on screen and the window is in front. A space on another machine runs p4 there.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { spaces, panes, focused, theme, settings, layout, window, run, shared, setShared, openOverlay, closeOverlay, props, nextCommand } from "herdr";
@@ -18,13 +18,22 @@ function visibleMod(node, mod) {
   return kids.some((c) => visibleMod(c, mod));
 }
 
-// Where to look for a client: the focused pane, then the space's panes in order.
+// Where to look for a client, as { cwd, on }: the focused pane, then the space's panes in order, then its folder.
+// A focused layout terminal block (no pane) is on the machine its address names ("vps/t7").
 function candidates(space) {
-  const tabs = new Set(space.tabs.map((t) => t.id)), f = focused(), out = [];
-  if (f?.space === space.id && f.cwd) out.push(f.cwd);
-  for (const p of panes()) if (tabs.has(p.tab) && p.cwd) out.push(p.cwd);
-  return [...new Set(out)];
+  const tabs = new Set(space.tabs.map((t) => t.id)), f = focused(), on = space.machine ?? null, out = [];
+  if (f?.space === space.id && f.cwd) {
+    const block = f.pane === null && typeof f.terminal === "string";
+    out.push({ cwd: f.cwd, on: block ? (f.terminal.includes("/") ? f.terminal.split("/")[0] : null) : on });
+  }
+  for (const p of panes()) if (tabs.has(p.tab) && p.cwd) out.push({ cwd: p.cwd, on });
+  if (space.folder) out.push({ cwd: space.folder, on });
+  const seen = new Set();
+  return out.filter((c) => { const k = place(c); return !seen.has(k) && seen.add(k); });
 }
+
+// One key per machine and folder (or client): the same path on two machines is two places.
+const place = (x) => `${x?.on ?? ""}|${x?.cwd ?? x?.client ?? ""}`;
 
 export function copyMenu() {
   const t = theme(), { menu, overlay } = props();
@@ -46,7 +55,7 @@ export class Panel {
   }
 
   reset() {
-    this.ws = null; this.none = false; this.remote = false; this.sig = null; this.changes = []; this.files = []; this.stats = {}; this.statsSig = "";
+    this.ws = null; this.none = false; this.sig = null; this.changes = []; this.files = []; this.stats = {}; this.statsSig = "";
     this.shelved = {}; this.rows = []; this.groupBy = new Map(); this.fileBy = new Map(); this.sizes = []; this.error = null; this.sel = null; this.picked = false;
     this.diff = { rows: [], note: null, width: 300, loading: false }; this.loaded = false;
   }
@@ -70,11 +79,13 @@ export class Panel {
   }
 
   async resolveSpace(space) {
-    for (const cwd of candidates(space)) {
-      const hit = this.cache.get(cwd);
+    for (const c of candidates(space)) {
+      const k = place(c), hit = this.cache.get(k);
       if (hit && Date.now() - hit.at < (hit.ws ? 120000 : 15000)) { if (hit.ws) return hit.ws; continue; }
-      const ws = await P4.resolveClient(cwd);
-      this.cache.set(cwd, { at: Date.now(), ws });
+      let ws;
+      try { ws = await P4.resolveClient(c.cwd, c.on); }
+      catch (e) { throw new Error(P4.failure(e, c.on)); }
+      this.cache.set(k, { at: Date.now(), ws });
       if (ws) return ws;
     }
     return null;
@@ -89,12 +100,11 @@ export class Panel {
       try {
         if (!space) return;
         if (space.id !== this.space) { this.space = space.id; this.reset(); changed = true; withStats = true; }
-        if (space.machine) { if (!this.remote) { this.reset(); this.remote = true; changed = true; } return; }
         let ws;
         try { ws = await this.resolveSpace(space); }
         catch (e) { if (this.error !== String(e.message ?? e)) { this.error = String(e.message ?? e); changed = true; } return; }
         if (this.space !== space.id) return;
-        if (ws?.client !== this.ws?.client) { this.reset(); this.ws = ws; changed = true; withStats = true; }
+        if (place(ws) !== place(this.ws)) { this.reset(); this.ws = ws; changed = true; withStats = true; }
         if (!ws) { if (!this.none) { this.none = true; changed = true; } return; }
         const st = await P4.fetchState(ws);
         if (this.space !== space.id || this.ws !== ws) return;
@@ -120,7 +130,7 @@ export class Panel {
             if (this.sel && JSON.stringify(stats[this.sel] ?? null) !== before && before !== null) this.loadDiff(cx);
           }
         }
-      } catch (e) { this.error = P4.explain(e.message ?? e); changed = true; }
+      } catch (e) { const error = P4.failure(e, this.ws?.on ?? space?.machine); if (this.error !== error) { this.error = error; changed = true; } }
       finally {
         this.busy = false; this.manual = false;
         if (changed) cx.notify();
@@ -137,8 +147,11 @@ export class Panel {
       .map(([change, files]) => ({ change, files: files.sort((a, b) => a.rel.localeCompare(b.rel)), desc: this.changes.find((c) => c.change === change)?.desc ?? "" }));
   }
 
+  // Folding is remembered per client (and machine, for a remote one).
+  foldKey(g) { return `${this.ws?.on ? `${this.ws.on}/` : ""}${this.ws?.client}:${g.change}`; }
+
   isCollapsed(g) {
-    const k = `${this.ws?.client}:${g.change}`;
+    const k = this.foldKey(g);
     return k in this.collapsed ? this.collapsed[k] : g.files.length > BIG_CL;
   }
 
@@ -207,7 +220,7 @@ export class Panel {
   firstFile() { return this.rows.find((r) => r.kind === "file")?.f.depot ?? null; }
 
   toggle(g, cx) {
-    this.collapsed[`${this.ws.client}:${g.change}`] = !this.isCollapsed(g);
+    this.collapsed[this.foldKey(g)] = !this.isCollapsed(g);
     localStorage.setItem("collapsed", JSON.stringify(this.collapsed));
     this.rebuild(); cx.notify();
   }
@@ -216,7 +229,7 @@ export class Panel {
   select(depot) {
     this.sel = depot; this.diff = { rows: [], note: null, width: 300, loading: Boolean(depot) };
     const all = { ...(shared(SELECTION) ?? {}) };
-    if (depot && this.ws) all[this.space] = { client: this.ws.client, root: this.ws.root, depot };
+    if (depot && this.ws) all[this.space] = { client: this.ws.client, root: this.ws.root, on: this.ws.on ?? null, depot };
     else delete all[this.space];
     setShared(SELECTION, all);
   }
@@ -238,7 +251,7 @@ export class Panel {
         const { lines, note } = await P4.loadDiff(ws, f, 1500);
         const rows = P4.diffRows(lines);
         diff = { rows, note, width: P4.diffWidth(rows, 75), loading: false };
-      } catch (e) { diff = { rows: [], note: `Cannot show this diff: ${P4.explain(e.message ?? e)}`, width: 300, loading: false }; }
+      } catch (e) { diff = { rows: [], note: `Cannot show this diff: ${P4.failure(e, ws.on)}`, width: 300, loading: false }; }
       if (this.token !== token || this.sel !== depot) return;
       this.diff = diff; cx.notify();
     });
@@ -295,7 +308,6 @@ export class Panel {
   }
 
   emptyText() {
-    if (this.remote) return "Perforce panel works for spaces on this computer only";
     if (this.error && !this.loaded) return this.error;
     if (this.none) return "No Perforce workspace in this space — open a terminal inside a client root";
     if (!this.loaded) return "Loading pending changes…";
@@ -319,7 +331,8 @@ export class Panel {
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().font_semibold().child("Perforce"))
         .when(Boolean(this.ws), (e) => e.child(div().min_w(0).flex_shrink(1).px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted).truncate()
-          .tooltip(`${this.ws.client}\n${this.ws.root}${this.ws.stream ? `\n${this.ws.stream}` : ""}`).child(this.ws.client)))
+          .tooltip(`${this.ws.on ? `Machine ${this.ws.on}\n` : ""}${this.ws.client}\n${this.ws.root}${this.ws.stream ? `\n${this.ws.stream}` : ""}`)
+          .child(this.ws.on ? `${this.ws.on} · ${this.ws.client}` : this.ws.client)))
         .child(div().flex_1())
         .when(this.loaded, (e) => e.child(div().flex_none().text_size(11).text_color(t.muted).child(`${total} file${total === 1 ? "" : "s"}`)))
         .child(div().id("p4-refresh").size(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().text_color(t.dim)

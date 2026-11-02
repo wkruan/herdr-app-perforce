@@ -1,8 +1,9 @@
 // Read-only Perforce helpers shared by the Perforce panel and its wide diff pane.
 // Nothing here opens, reverts, shelves or submits: only info, changes, fstat, describe, diff and print.
+// A workspace `ws` is { client, root, on }: `on` is the machine p4 runs on (a space's `machine`), null for this one.
 import { div } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { exec, readTextFile } from "herdr";
+import { exec, readTextFile, machines } from "herdr";
 
 // This mod's folder name. If you install it under another name, change it here only.
 export const MOD = "perforce";
@@ -31,9 +32,19 @@ export function explain(text) {
   return s.split(/\r?\n/).find(Boolean) || "Perforce command failed";
 }
 
+// A thrown failure (exec could not start, or the machine is gone), explained for the machine it ran on.
+export function failure(e, on) {
+  const s = String(e?.message ?? e ?? "");
+  if (on) {
+    const m = machines().find((x) => x.name === on);
+    if (!m || m.layout === "unavailable" || (/machine|ssh|disconnected|not connected|offline|connection (closed|lost|reset)|broken pipe/i.test(s) && !/p4/i.test(s))) return `Cannot reach ${on}`;
+  }
+  return explain(s);
+}
+
 // p4 with JSON tagged output. Warnings (severity 2, e.g. "file(s) not opened") are not errors.
 export async function tagged(args, ws) {
-  const r = await exec("p4", ["-Mj", "-ztag", ...(ws?.client ? ["-c", ws.client] : []), ...args], { cwd: ws?.root ?? ws?.cwd });
+  const r = await exec("p4", ["-Mj", "-ztag", ...(ws?.client ? ["-c", ws.client] : []), ...args], { cwd: ws?.root ?? ws?.cwd, on: ws?.on ?? null });
   const recs = parse(r.stdout);
   const errors = recs.filter((x) => (x.severity ?? 0) >= 3).map((x) => String(x.data ?? "").trim());
   if (!recs.length && r.stderr.trim()) errors.push(r.stderr.trim());
@@ -42,20 +53,31 @@ export async function tagged(args, ws) {
 }
 
 async function plain(args, ws) {
-  const r = await exec("p4", ["-c", ws.client, ...args], { cwd: ws.root });
+  const r = await exec("p4", ["-c", ws.client, ...args], { cwd: ws.root, on: ws.on ?? null });
   return { text: r.stdout, error: r.code !== 0 || (!r.stdout && r.stderr.trim()) ? explain(r.stderr || r.stdout) : null };
 }
 
-const norm = (p) => String(p || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
-export const under = (path, root) => { const a = norm(path), b = norm(root); return Boolean(b) && (a === b || a.startsWith(b + "\\")); };
+// Paths come from whichever machine the space is on, so the form of the path decides the rules:
+// Windows (C:\…, \\server\…) ignores case and takes either slash; POSIX is case-sensitive.
+const isWindowsPath = (p) => /^[a-z]:([\\/]|$)|^[\\/]{2}[^\\/]/i.test(String(p || ""));
+export function under(path, root) {
+  if (!path || !root) return false;
+  if (isWindowsPath(root)) {
+    const norm = (p) => String(p).replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+    const a = norm(path), b = norm(root);
+    return a === b || a.startsWith(b + "\\");
+  }
+  const a = String(path).replace(/\/+$/, ""), b = String(root).replace(/\/+$/, "");
+  return b === "" ? a.startsWith("/") || a === "" : a === b || a.startsWith(b + "/");
+}
 
-// The client whose root holds this folder, or null. Contacts the server once (p4 info).
-export async function resolveClient(cwd) {
-  const { recs, error } = await tagged(["info"], { cwd });
+// The client whose root holds this folder on that machine, or null. Contacts the server once (p4 info).
+export async function resolveClient(cwd, on = null) {
+  const { recs, error } = await tagged(["info"], { cwd, on });
   if (error) throw new Error(error);
   const i = recs[0];
   if (!i?.clientName || i.clientName === "*unknown*" || !i.clientRoot || !under(cwd, i.clientRoot)) return null;
-  return { client: i.clientName, root: i.clientRoot, user: i.userName, stream: i.clientStream ?? null };
+  return { client: i.clientName, root: i.clientRoot, user: i.userName, stream: i.clientStream ?? null, on };
 }
 
 export function fileFrom(r, ws) {
@@ -102,10 +124,10 @@ export async function diffStats(ws, files, cap = 300) {
       current = null;
     }
   }
-  // New files: their whole text is added (local read, no server).
+  // New files: their whole text is added (a file read on that machine, no server).
   const fresh = files.filter((f) => !isBinary(f.type) && f.local && !GONE.has(f.action) && (NO_HAVE.has(f.action) || f.have === null)).slice(0, 100);
   await Promise.all(fresh.map(async (f) => {
-    const text = await readTextFile(f.local).catch(() => null);
+    const text = await readTextFile(f.local, { on: ws.on ?? null }).catch(() => null);
     if (text && !text.includes("\0")) stats[f.depot] = { add: text.split("\n").length - Number(text.endsWith("\n")), del: 0 };
   }));
   return stats;
@@ -150,7 +172,7 @@ export async function loadDiff(ws, f, limit = 1500) {
     const body = textLines(r.text);
     lines = [`@@ -1,${body.length} +0,0 @@`, ...body.map((l) => `-${l}`)];
   } else if (NO_HAVE.has(f.action) || f.have === null) {
-    const text = f.local ? await readTextFile(f.local).catch(() => null) : null;
+    const text = f.local ? await readTextFile(f.local, { on: ws.on ?? null }).catch(() => null) : null;
     if (text === null) return { lines: [], note: "Cannot preview this file (missing, larger than 1 MiB, or unreadable)" };
     if (text.includes("\0")) return { lines: [], note: `No text preview (${f.type || "binary or UTF-16"})` };
     const body = textLines(text);

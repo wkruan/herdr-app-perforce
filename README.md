@@ -7,7 +7,7 @@ A read-only **Perforce** panel for the [Herdr app](https://herdr.dev): the pendi
 - One group per pending changelist (default first), with the files open in each
 - Status at a glance: action, out of date, needs resolve, locked / exclusive, opened by others, shelved files
 - `+added −deleted` per file and a diff against the have revision; a wide diff pane that follows the selection
-- Follows the shown space; polls only while the panel is on screen; never changes anything in Perforce
+- Follows the shown space, also on another machine (p4 runs there); polls only while the panel is on screen; never changes anything in Perforce
 
 [中文说明](#中文说明)
 
@@ -19,7 +19,7 @@ Ask your coding agent:
 
 It follows [RECIPE.md](RECIPE.md#install): copy `mods/perforce`, add a **Perforce** button to a clone of your layout, check, switch. Or do those three steps yourself.
 
-Requirements: `p4` on PATH, and workspaces that resolve their client from the folder (P4CONFIG files such as `.p4config`, or P4CLIENT). Spaces on this computer only.
+Requirements: `p4` on PATH, and workspaces that resolve their client from the folder (P4CONFIG files such as `.p4config`, or P4CLIENT), on the machine the space is on. Spaces on another machine (Herdr's Add machine) run `p4` there, so only that machine needs `p4` and a login; the client chip then reads `<machine> · <client>`.
 
 ## Use
 
@@ -49,11 +49,11 @@ Herdr app 的 **Perforce** 只读面板：在右侧边栏（Files、Changes 旁�
 - 每个 pending CL 一组（default 在最前），列出打开的文件
 - 状态一目了然：操作类型、落后（need sync）、需要 resolve、锁定 / 独占、他人也打开、shelve
 - 每个文件的 `+增 −删` 行数，和 have 版本对比的 diff；可展开为宽 diff pane，跟随选中项
-- 跟随当前 Space；只在面板可见时轮询；不会修改 Perforce 中的任何内容
+- 跟随当前 Space，也支持远程 machine 上的 Space（p4 在那台机器上运行）；只在面板可见时轮询；不会修改 Perforce 中的任何内容
 
 **安装**：对你的 coding agent 说「安装 https://github.com/wkruan/herdr-app-perforce 这个 Herdr mod」，它会按 [RECIPE.md](RECIPE.md#install) 完成：复制 `mods/perforce`、在你的布局副本里加上 **Perforce** 按钮、检查、切换。
 
-**要求**：`p4` 在 PATH 上；工作区能从目录识别 client（`.p4config` 等 P4CONFIG 文件，或 P4CLIENT）。仅支持本机 Space。
+**要求**：`p4` 在 PATH 上；工作区能从目录识别 client（`.p4config` 等 P4CONFIG 文件，或 P4CLIENT）。以上都指 Space 所在的那台机器：远程 machine（Herdr 的 Add machine）上的 Space 会在那台机器上运行 `p4`，本机不需要 p4，client 标签显示为 `<machine> · <client>`。
 
 **使用**：点 tab 栏的 **Perforce** 打开；点文件看 diff，再点一次关闭；展开按钮（或 Enter）打开宽 diff pane；右键复制路径、CL 号或描述；点过列表后可用 ↑/↓（k/j）切换文件、←/→（h/l）折叠、Enter 展开、r 刷新。
 

@@ -1,5 +1,6 @@
 // The wide diff for the file selected in this space's Perforce panel (props { view: "diff", space }).
 // Follows the panel's selection; refreshes while its space is shown and the window is in front.
+// The selection names the machine its client is on, so a remote space's diff comes from there.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { spaces, panes, theme, settings, window, shared, props } from "herdr";
@@ -7,6 +8,7 @@ import * as P4 from "./p4.js";
 
 const REFRESH = 15000, LIMIT = 5000;
 const { MOD, icon } = P4;
+const selKey = (sel) => (sel ? `${sel.on ?? ""}|${sel.client}|${sel.depot}` : null);
 
 export class DiffPane {
   init(cx) {
@@ -27,18 +29,18 @@ export class DiffPane {
   }
 
   load(cx) {
-    const sel = this.target(), key = sel ? `${sel.client}|${sel.depot}` : null;
+    const sel = this.target(), key = selKey(sel);
     this.last = Date.now();
     if (!sel) return;
     const token = (this.token ?? 0) + 1; this.token = token; this.loading = !this.rows.length && !this.note;
     cx.spawn(async (cx) => {
       let file = null, rows = [], note = null;
       try {
-        const ws = { client: sel.client, root: sel.root };
+        const ws = { client: sel.client, root: sel.root, on: sel.on ?? null };
         file = await P4.fileInfo(ws, sel.depot);
         if (!file || !file.action) note = "This file is no longer open in the client";
         else { const d = await P4.loadDiff(ws, file, LIMIT); rows = P4.diffRows(d.lines); note = d.note; }
-      } catch (e) { note = `Cannot show this diff: ${P4.explain(e.message ?? e)}`; }
+      } catch (e) { note = `Cannot show this diff: ${P4.failure(e, sel.on)}`; }
       if (this.token !== token || this.key !== key) return;
       this.file = file; this.rows = rows; this.note = note; this.width = P4.diffWidth(rows, 125); this.loading = false;
       cx.notify();
@@ -46,7 +48,7 @@ export class DiffPane {
   }
 
   render(cx) {
-    const sel = this.target(), key = sel ? `${sel.client}|${sel.depot}` : null;
+    const sel = this.target(), key = selKey(sel);
     if (key !== this.key) { this.key = key; this.file = null; this.rows = []; this.note = null; this.load(cx); }
     const t = theme(), c = P4.palette(settings().dark !== false), f = this.file, stat = P4.countDiff(this.rows);
     const rel = f?.rel ?? sel?.depot?.split("/").slice(-1)[0] ?? "";
