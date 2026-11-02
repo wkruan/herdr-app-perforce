@@ -5,7 +5,8 @@ import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle } fr
 import { spaces, panes, focused, theme, settings, layout, window, run, shared, setShared, openOverlay, closeOverlay, props, nextCommand } from "herdr";
 import * as P4 from "./p4.js";
 
-const POLL = 5000, STATS = 15000, BIG_CL = 200, CL_ROW = 30, FILE_ROW = 26;
+// HUNG: a refresh still running after this long is given up (exec stops at 30 s, a remote read may never answer).
+const POLL = 5000, STATS = 15000, HUNG = 45000, BIG_CL = 200, CL_ROW = 30, FILE_ROW = 26;
 const { MOD, icon } = P4;
 const SELECTION = "perforce.selection";
 
@@ -47,7 +48,7 @@ export class Panel {
   init(cx) {
     this.cache = new Map(); this.collapsed = JSON.parse(localStorage.getItem("collapsed") ?? "{}");
     this.reset(); this.size = { width: 368, height: 600 };
-    this.lastPoll = 0; this.lastStats = 0; this.visible = false;
+    this.lastPoll = 0; this.lastStats = 0; this.visible = false; this.run = 0; this.busySince = 0;
     cx.timer.every(1000, (cx) => this.tick(cx));
     this.handle = cx.focus_handle(); this.scroll = VirtualListScrollHandle.new();
     // "perforce.next" etc. from keys.json or `herdr-app do`.
@@ -92,9 +93,13 @@ export class Panel {
   }
 
   refresh(cx, withStats) {
-    if (this.busy) { this.again = this.again || withStats || true; return; }
-    this.busy = true; this.lastPoll = Date.now();
+    const now = Date.now();
+    if (this.busy && now - this.busySince < HUNG) { this.again = this.again || withStats || true; return; }
     const space = spaces().find((s) => s.active);
+    // A refresh that never finished: drop it (its results are ignored) so the panel keeps polling.
+    if (this.busy) { this.again = false; this.manual = false; this.error = P4.hung(this.ws?.on ?? space?.machine); withStats = true; cx.notify(); }
+    const run = ++this.run, live = () => this.run === run;
+    this.busy = true; this.busySince = now; this.lastPoll = now;
     cx.spawn(async (cx) => {
       let changed = false;
       try {
@@ -102,12 +107,12 @@ export class Panel {
         if (space.id !== this.space) { this.space = space.id; this.reset(); changed = true; withStats = true; }
         let ws;
         try { ws = await this.resolveSpace(space); }
-        catch (e) { if (this.error !== String(e.message ?? e)) { this.error = String(e.message ?? e); changed = true; } return; }
-        if (this.space !== space.id) return;
+        catch (e) { if (live() && this.error !== String(e.message ?? e)) { this.error = String(e.message ?? e); changed = true; } return; }
+        if (!live() || this.space !== space.id) return;
         if (place(ws) !== place(this.ws)) { this.reset(); this.ws = ws; changed = true; withStats = true; }
         if (!ws) { if (!this.none) { this.none = true; changed = true; } return; }
         const st = await P4.fetchState(ws);
-        if (this.space !== space.id || this.ws !== ws) return;
+        if (!live() || this.space !== space.id || this.ws !== ws) return;
         if (st.error) { if (this.error !== st.error) { this.error = st.error; changed = true; } return; }
         if (this.error) { this.error = null; changed = true; }
         if (st.sig !== this.sig) {
@@ -122,7 +127,7 @@ export class Panel {
         if (withStats) {
           this.lastStats = Date.now();
           const [stats, shelved] = await Promise.all([P4.diffStats(ws, this.files), P4.shelvedCounts(ws)]);
-          if (this.ws !== ws) return;
+          if (!live() || this.ws !== ws) return;
           const sig = JSON.stringify([stats, shelved]);
           if (sig !== this.statsSig) {
             const before = this.sel ? JSON.stringify(this.stats[this.sel] ?? null) : null;
@@ -130,8 +135,9 @@ export class Panel {
             if (this.sel && JSON.stringify(stats[this.sel] ?? null) !== before && before !== null) this.loadDiff(cx);
           }
         }
-      } catch (e) { const error = P4.failure(e, this.ws?.on ?? space?.machine); if (this.error !== error) { this.error = error; changed = true; } }
+      } catch (e) { const error = P4.failure(e, this.ws?.on ?? space?.machine); if (live() && this.error !== error) { this.error = error; changed = true; } }
       finally {
+        if (!live()) return; // given up on; a newer refresh owns the state
         this.busy = false; this.manual = false;
         if (changed) cx.notify();
         if (this.again) { this.again = false; this.tick(cx, true); }

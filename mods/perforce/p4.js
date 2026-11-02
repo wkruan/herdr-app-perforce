@@ -35,12 +35,16 @@ export function explain(text) {
 // A thrown failure (exec could not start, or the machine is gone), explained for the machine it ran on.
 export function failure(e, on) {
   const s = String(e?.message ?? e ?? "");
+  if (/took longer than \d+ ?s/i.test(s)) return on ? `${on} did not answer within 30 s (network or Perforce server slow); retrying` : "p4 took longer than 30 s; retrying";
   if (on) {
     const m = machines().find((x) => x.name === on);
     if (!m || m.layout === "unavailable" || (/machine|ssh|disconnected|not connected|offline|connection (closed|lost|reset)|broken pipe/i.test(s) && !/p4/i.test(s))) return `Cannot reach ${on}`;
   }
   return explain(s);
 }
+
+// A refresh that never came back (no answer and no error).
+export const hung = (on) => on ? `${on} stopped answering; retrying` : "p4 stopped answering; retrying";
 
 // p4 with JSON tagged output. Warnings (severity 2, e.g. "file(s) not opened") are not errors.
 export async function tagged(args, ws) {
