@@ -28,7 +28,7 @@ A read-only Perforce panel for the Herdr app's right-hand sidebar, next to Files
 - **Expand**: opens the wide pane to the right of the focused terminal in the shown tab, or focuses the one already there.
 - **Right-click**: a file offers Copy depot path, Copy local path, Copy file name; a numbered change offers Copy change number and Copy description.
 - **Keyboard**, once the list was clicked: ↑/↓ or k/j move between files, ←/→ or h/l fold or unfold the selected file's change, Enter opens the wide pane, r refreshes. The same commands are `perforce.next`, `perforce.prev`, `perforce.fold`, `perforce.unfold`, `perforce.expand`, `perforce.refresh` for keys.json or `herdr-app do`.
-- **Errors**: login problems read `Not logged in — run p4 login`, network problems `Cannot reach the Perforce server`, an offline machine `Cannot reach <machine>`; the last good list stays, marked stale.
+- **Errors**: login problems read `Not logged in — run p4 login`, network problems `Cannot reach the Perforce server`, an offline machine `Cannot reach <machine>`, a machine slower than Herdr's 30 s limit `<machine> did not answer within 30 s …; retrying`; the last good list stays, marked stale. A refresh that never returns (a dropped answer from another machine) is given up after 45 s with `<machine> stopped answering; retrying`, and polling goes on, so the panel never stays stuck on a spinner.
 - **Read-only**: it never runs edit, add, revert, reopen, shelve, submit or any other command that changes Perforce.
 
 ## Built from
