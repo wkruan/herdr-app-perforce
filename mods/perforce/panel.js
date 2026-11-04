@@ -109,7 +109,11 @@ export class Panel {
         try { ws = await this.resolveSpace(space); }
         catch (e) { if (live() && this.error !== String(e.message ?? e)) { this.error = String(e.message ?? e); changed = true; } return; }
         if (!live() || this.space !== space.id) return;
-        if (place(ws) !== place(this.ws)) { this.reset(); this.ws = ws; changed = true; withStats = true; }
+        // A re-resolve (manual refresh, cache expiry) returns a new object for the same client: adopt it,
+        // or every later result is dropped by the `this.ws !== ws` checks below.
+        if (place(ws) !== place(this.ws)) { this.reset(); changed = true; withStats = true; }
+        else if (ws && JSON.stringify(ws) !== JSON.stringify(this.ws)) changed = true;
+        this.ws = ws;
         if (!ws) { if (!this.none) { this.none = true; changed = true; } return; }
         const st = await P4.fetchState(ws);
         if (!live() || this.space !== space.id || this.ws !== ws) return;
@@ -138,8 +142,9 @@ export class Panel {
       } catch (e) { const error = P4.failure(e, this.ws?.on ?? space?.machine); if (live() && this.error !== error) { this.error = error; changed = true; } }
       finally {
         if (!live()) return; // given up on; a newer refresh owns the state
+        const spun = this.manual;
         this.busy = false; this.manual = false;
-        if (changed) cx.notify();
+        if (changed || spun) cx.notify();
         if (this.again) { this.again = false; this.tick(cx, true); }
       }
     });
